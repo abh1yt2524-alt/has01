@@ -347,7 +347,7 @@ input:focus,select:focus,textarea:focus{transform:translateY(-1px)}
       </div>
 
       <div class="form-card">
-        <form id="clientForm" action="" method="POST" target="emailSubmitFrame" data-email-endpoint="https://script.google.com/macros/s/AKfycbyyRTsKjW5MyKgjo_isrs9CWrJtQt5XOPt4cwBaViO163K-mlQDH6nk6vNK9IjIBQtnoQ/exec">
+        <form id="clientForm" action="#" method="POST" data-email-endpoint="">
           <input type="hidden" name="Form Name" value="Hasini's Diet Care - Client Profile">
 
           <div class="form-grid">
@@ -436,7 +436,7 @@ input:focus,select:focus,textarea:focus{transform:translateY(-1px)}
     <div class="chat-head">
       <div>
         <strong id="chatTitle">Hasini's Diet Care 💙</strong>
-        <small>Welcome chat</small>
+        <small>Private client chat</small>
       </div>
       <button type="button" class="chat-close" id="chatClose" aria-label="Close chat">×</button>
     </div>
@@ -457,7 +457,7 @@ input:focus,select:focus,textarea:focus{transform:translateY(-1px)}
         <input id="chatInput" type="text" maxlength="500" placeholder="Type a message for Hasini…">
         <button type="button" id="chatSend">Send</button>
       </div>
-      <div class="chat-note" id="chatNote">Your message will be sent to Hasini's Diet Care.</div>
+      <div class="chat-note" id="chatNote">Messages are saved securely in your conversation.</div>
     </div>
   </div>
 </div>
@@ -492,10 +492,10 @@ document.querySelectorAll('nav a').forEach(a=>{
   a.addEventListener('click',()=>document.getElementById('nav').classList.remove('open'));
 });
 
+
 const form=document.getElementById('clientForm');
 const btn=document.getElementById('submitBtn');
 const status=document.getElementById('status');
-const submitFrame=document.getElementById('emailSubmitFrame');
 const welcomeChat=document.getElementById('welcomeChat');
 const chatClose=document.getElementById('chatClose');
 const chatInput=document.getElementById('chatInput');
@@ -505,13 +505,12 @@ const whatsappLink=document.getElementById('whatsappLink');
 const welcomeName=document.getElementById('welcomeName');
 const welcomeTime=document.getElementById('welcomeTime');
 
-/* Hasini's Instagram account */
+/* After deploying the Worker, paste its URL here, without a trailing slash. */
+const CHAT_API_URL='https://morning-night-d10b.abh1yt2524.workers.dev';
 const INSTAGRAM_USERNAME='nourishwell00';
 const INSTAGRAM_PROFILE='https://www.instagram.com/nourishwell00/';
-
-let formSubmitting=false;
-let emailSubmitStartedAt=0;
-let lastClient={id:'',name:'',email:'',phone:''};
+let lastClient={id:'',name:'',token:''};
+let pollingTimer=null;
 
 function showStatus(message, success){
   status.style.display='block';
@@ -519,106 +518,83 @@ function showStatus(message, success){
   status.style.color=success ? '#21733A' : '#A33A3A';
   status.textContent=message;
 }
-
+function apiReady(){return CHAT_API_URL && !CHAT_API_URL.includes('PASTE_YOUR_');}
 function openWelcomeChat(client){
   lastClient=client;
   welcomeName.textContent='Hi '+client.name+'!';
   welcomeTime.textContent=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   whatsappLink.href=INSTAGRAM_PROFILE;
-  whatsappLink.target='_blank';
-  whatsappLink.rel='noopener';
+  whatsappLink.target='_blank'; whatsappLink.rel='noopener';
   whatsappLink.textContent='📷 Chat with Hasini on Instagram';
-  whatsappLink.onclick=null;
-  welcomeChat.classList.add('open');
-  welcomeChat.setAttribute('aria-hidden','false');
+  welcomeChat.classList.add('open'); welcomeChat.setAttribute('aria-hidden','false');
+  renderMessages();
+  if(pollingTimer) clearInterval(pollingTimer);
+  pollingTimer=setInterval(renderMessages,5000);
   setTimeout(()=>chatInput.focus(),250);
 }
 function closeWelcomeChat(){
-  welcomeChat.classList.remove('open');
-  welcomeChat.setAttribute('aria-hidden','true');
+  welcomeChat.classList.remove('open'); welcomeChat.setAttribute('aria-hidden','true');
+  if(pollingTimer){clearInterval(pollingTimer);pollingTimer=null;}
 }
 chatClose.addEventListener('click',closeWelcomeChat);
 welcomeChat.addEventListener('click',(e)=>{if(e.target===welcomeChat) closeWelcomeChat();});
 
-form.addEventListener('submit', function(e){
-  const endpoint=(form.dataset.emailEndpoint || '').trim();
-  if(!endpoint || endpoint.includes('PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE')){
-    e.preventDefault();
-    showStatus('The submission service is not available right now. Please try again in a moment.', false);
-    return;
-  }
-
-  const formData=new FormData(form);
-  const client={
-    id:'HC-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8),
-    name:String(formData.get('Name')||'Client').trim(),
-    email:String(formData.get('Email')||'').trim(),
-    phone:String(formData.get('Phone / WhatsApp')||'').trim()
-  };
-  formData.append('Client ID',client.id);
-  formData.append('Submission Type','Client Profile');
-  /* Add the endpoint dynamically because the form action is intentionally blank in the HTML. */
-  form.action=endpoint;
-  lastClient=client;
-  localStorage.setItem('hasiniClientId',client.id);
-  localStorage.setItem('hasiniClientName',client.name);
-
-  /* FormData additions must be present in the submitted form, so create hidden fields. */
-  ['Client ID','Submission Type'].forEach(name=>{
-    let field=form.querySelector('input[data-generated="'+name+'"]');
-    if(!field){field=document.createElement('input');field.type='hidden';field.name=name;field.dataset.generated=name;form.appendChild(field);}
-    field.value=formData.get(name);
-  });
-
-  formSubmitting=true;
-  emailSubmitStartedAt=Date.now();
-  btn.disabled=true;
-  btn.style.opacity='.65';
-  btn.textContent='Submitting...';
-  showStatus('Your details are being sent securely. Please wait...', true);
+form.addEventListener('submit', async function(e){
+  e.preventDefault();
+  if(!apiReady()){showStatus('The chat service needs to be connected before submissions can be accepted. Please try again later.',false);return;}
+  btn.disabled=true; btn.textContent='Submitting...';
+  showStatus('Submitting your details securely...',true);
+  try{
+    const payload=Object.fromEntries(new FormData(form).entries());
+    const response=await fetch(CHAT_API_URL+'/api/clients',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const result=await response.json();
+    if(!response.ok) throw new Error(result.error||'Submission failed.');
+    lastClient={id:result.clientId,name:result.name,token:result.token};
+    sessionStorage.setItem('hasiniChatClient',JSON.stringify(lastClient));
+    showStatus('Your details were submitted successfully. You can now message Hasini here.',true);
+    form.reset(); openWelcomeChat(lastClient);
+  }catch(err){
+    showStatus('We could not submit your details: '+err.message+'. Please try again.',false);
+  }finally{btn.disabled=false;btn.textContent='Submit Client Details →';}
 });
 
-submitFrame.addEventListener('load', function(){
-  if(!formSubmitting) return;
-  if(Date.now()-emailSubmitStartedAt < 800) return;
-  formSubmitting=false;
-  const client={...lastClient};
-  showStatus("Submitted successfully! Your details have been received and the welcome message has been sent.", true);
-  btn.textContent='Submitted ✓';
-  openWelcomeChat(client);
-  form.reset();
-  setTimeout(()=>{btn.disabled=false;btn.style.opacity='1';btn.textContent='Submit Client Details →';},2200);
-});
-
-setTimeout(()=>{
-  if(formSubmitting && Date.now()-emailSubmitStartedAt > 15000){
-    formSubmitting=false;btn.disabled=false;btn.style.opacity='1';btn.textContent='Submit Client Details →';
-    showStatus('We could not confirm the submission. Please check your internet connection and try again.', false);
-  }
-},16000);
-
-function sendChatMessage(){
+async function renderMessages(){
+  if(!lastClient.id||!apiReady()) return;
+  try{
+    const response=await fetch(CHAT_API_URL+'/api/messages?clientId='+encodeURIComponent(lastClient.id),{headers:{'X-Client-Token':lastClient.token}});
+    if(!response.ok) return;
+    const data=await response.json();
+    const body=document.getElementById('chatBody');
+    body.innerHTML='';
+    data.messages.forEach(m=>{
+      const bubble=document.createElement('div');
+      bubble.className='chat-message';
+      bubble.style.margin=m.sender==='client'?'10px 0 0 auto':'10px 0 0';
+      if(m.sender==='client'){bubble.style.background='#dcf8c6';bubble.style.borderRadius='17px 17px 5px 17px';}
+      bubble.textContent=m.text;
+      const time=document.createElement('span');time.className='chat-time';
+      time.textContent=new Date(m.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      bubble.appendChild(time);body.appendChild(bubble);
+    });
+    body.scrollTop=body.scrollHeight;
+    chatNote.textContent='Messages are saved in this conversation. Hasini can reply from the private admin dashboard.';
+  }catch(_){}
+}
+async function sendChatMessage(){
   const message=chatInput.value.trim();
-  if(!message) return;
-
-  // A website cannot send a private Instagram DM directly without Meta's
-  // Instagram messaging API. Copy the message and open Hasini's Instagram.
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(message).catch(()=>{});
-  }
-  const bubble=document.createElement('div');
-  bubble.className='chat-message';
-  bubble.style.margin='10px 0 0 auto';bubble.style.background='#dcf8c6';bubble.style.borderRadius='17px 17px 5px 17px';
-  bubble.textContent=message;
-  const time=document.createElement('span');time.className='chat-time';time.textContent=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});bubble.appendChild(time);
-  document.getElementById('chatBody').appendChild(bubble);
-  chatInput.value='';
-  chatNote.textContent='Your message was copied. Instagram will open so you can send it to Hasini.';
-  window.open('https://ig.me/m/'+INSTAGRAM_USERNAME, '_blank', 'noopener');
-  document.getElementById('chatBody').scrollTop=document.getElementById('chatBody').scrollHeight;
+  if(!message||!lastClient.id||!apiReady()) return;
+  chatSend.disabled=true;
+  try{
+    const response=await fetch(CHAT_API_URL+'/api/messages',{method:'POST',headers:{'Content-Type':'application/json','X-Client-Token':lastClient.token},body:JSON.stringify({clientId:lastClient.id,text:message})});
+    const result=await response.json();
+    if(!response.ok) throw new Error(result.error||'Message could not be sent.');
+    chatInput.value='';await renderMessages();
+  }catch(err){chatNote.textContent=err.message;}
+  finally{chatSend.disabled=false;}
 }
 chatSend.addEventListener('click',sendChatMessage);
 chatInput.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();sendChatMessage();}});
+window.addEventListener('load',()=>{try{const saved=JSON.parse(sessionStorage.getItem('hasiniChatClient')||'null');if(saved&&saved.id&&saved.token)lastClient=saved;}catch(_){}});
 
 /* Smooth scroll-reveal animations */
 const revealTargets=[
