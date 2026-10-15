@@ -1,0 +1,26 @@
+{
+  "id": "./admin.html",
+  "name": "Hasini’s Diet Care Inbox",
+  "short_name": "Hasini Inbox",
+  "description": "Private client messaging and notifications for Hasini’s Diet Care.",
+  "start_url": "./admin.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#81CDEE",
+  "icons": [
+    {
+      "src": "./icons/hasini-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/hasini-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

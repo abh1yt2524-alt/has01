@@ -3,6 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#81CDEE">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hasini Diet Care">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icons/hasini-icon-180.png">
 <title>Hasini's Diet Care | Personalized Nutrition</title>
 <meta name="description" content="Hasini's Diet Care - Personalized nutrition, healthy routines and practical diet guidance.">
 <style>
@@ -325,13 +330,12 @@ input:focus,select:focus,textarea:focus{transform:translateY(-1px)}
   <div class="container">
     <div class="section-head">
       <h2>Client Profile</h2>
-      <p>Fill in your details below. Your information will be sent to Hasini's Diet Care by email.</p>
+      <p>Fill in your details below. Your profile will be saved for private chat, and an email notification will be requested.</p>
     </div>
 
     <!--
       EMAIL SETUP:
-      This form sends client details through the configured Google Apps Script web app. The same backend sends a welcome email to the client and receives
-      chat messages from the welcome popup.
+      Client details are saved to the private chat database and also submitted to the existing Google Apps Script endpoint for email processing.
     -->
     <div class="form-wrap">
       <div class="info-card">
@@ -346,7 +350,7 @@ input:focus,select:focus,textarea:focus{transform:translateY(-1px)}
       </div>
 
       <div class="form-card">
-        <form id="clientForm" action="#" method="POST" data-email-endpoint="">
+        <form id="clientForm" action="#" method="POST" data-email-endpoint="https://script.google.com/macros/s/AKfycbyyRTsKjW5MyKgjo_isrs9CWrJtQt5XOPt4cwBaViO163K-mlQDH6nk6vNK9IjIBQtnoQ/exec">
           <input type="hidden" name="Form Name" value="Hasini's Diet Care - Client Profile">
 
           <div class="form-grid">
@@ -459,6 +463,7 @@ input:focus,select:focus,textarea:focus{transform:translateY(-1px)}
         <input id="chatInput" type="text" maxlength="500" placeholder="Type a message for Hasini…">
         <button type="button" id="chatSend">Send</button>
       </div>
+      <div class="chat-note" id="chatTypingIndicator" aria-live="polite" style="display:none"></div>
       <div class="chat-note" id="chatNote">Messages are saved securely in your conversation.</div>
     </div>
   </div>
@@ -503,6 +508,7 @@ const chatClose=document.getElementById('chatClose');
 const chatInput=document.getElementById('chatInput');
 const chatSend=document.getElementById('chatSend');
 const chatNote=document.getElementById('chatNote');
+const chatTypingIndicator=document.getElementById('chatTypingIndicator');
 const chatLauncher=document.getElementById('chatLauncher');
 const welcomeName=document.getElementById('welcomeName');
 const welcomeTime=document.getElementById('welcomeTime');
@@ -540,45 +546,120 @@ chatClose.addEventListener('click',closeWelcomeChat);
 chatLauncher.addEventListener('click',()=>{if(lastClient.id) openWelcomeChat(lastClient);});
 welcomeChat.addEventListener('click',(e)=>{if(e.target===welcomeChat) closeWelcomeChat();});
 
+/* Keep profile emails running through the existing Google Apps Script, while
+   the same profile is also saved to Cloudflare D1 for private in-app chat. */
+const EMAIL_ENDPOINT=(form.dataset.emailEndpoint || '').trim();
+function sendEmailNotification(payload, clientId){
+  if(!EMAIL_ENDPOINT || EMAIL_ENDPOINT.includes('PASTE_YOUR_')) return false;
+  const frame=document.getElementById('emailSubmitFrame');
+  if(!frame) return false;
+  const emailForm=document.createElement('form');
+  emailForm.method='POST';
+  emailForm.action=EMAIL_ENDPOINT;
+  emailForm.target='emailSubmitFrame';
+  emailForm.enctype='application/x-www-form-urlencoded';
+  emailForm.style.display='none';
+  const emailPayload={...payload,'Client ID':clientId,'Submission Type':'Client Profile'};
+  Object.entries(emailPayload).forEach(([name,value])=>{
+    const input=document.createElement('input');
+    input.type='hidden'; input.name=name; input.value=String(value ?? '');
+    emailForm.appendChild(input);
+  });
+  document.body.appendChild(emailForm);
+  try {
+    HTMLFormElement.prototype.submit.call(emailForm);
+    setTimeout(()=>emailForm.remove(),3000);
+    return true;
+  } catch (err) {
+    emailForm.remove();
+    console.error('Could not submit email notification form:',err);
+    return false;
+  }
+}
+
 form.addEventListener('submit', async function(e){
   e.preventDefault();
-  if(!apiReady()){showStatus('The chat service needs to be connected before submissions can be accepted. Please try again later.',false);return;}
+  if(!apiReady()){
+    showStatus('The chat service needs to be connected before submissions can be accepted. Please try again later.',false);
+    return;
+  }
   btn.disabled=true; btn.textContent='Submitting...';
-  showStatus('Submitting your details securely...',true);
+  showStatus('Saving your details and preparing email notification...',true);
   try{
     const payload=Object.fromEntries(new FormData(form).entries());
-    const response=await fetch(CHAT_API_URL+'/api/clients',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const response=await fetch(CHAT_API_URL+'/api/clients',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload), cache:'no-store'
+    });
     const result=await response.json();
     if(!response.ok) throw new Error(result.error||'Submission failed.');
+
     lastClient={id:result.clientId,name:result.name,token:result.token};
     sessionStorage.setItem('hasiniChatClient',JSON.stringify(lastClient));
-    showStatus('Your details were submitted successfully. You can now message Hasini here.',true);
-    form.reset(); openWelcomeChat(lastClient);
+
+    // Send a second form POST to the previously configured Google Apps Script.
+    // The hidden iframe avoids cross-origin restrictions; email delivery itself
+    // must still be enabled in the Apps Script deployment.
+    const emailStarted=sendEmailNotification(payload,result.clientId);
+    showStatus(
+      emailStarted
+        ? 'Your details were saved. The email notification request was submitted, and you can now message Hasini here.'
+        : 'Your details were saved for chat, but the email notification could not be started. Please contact Hasini to check the email setup.',
+      true
+    );
+    form.reset();
+    openWelcomeChat(lastClient);
   }catch(err){
     showStatus('We could not submit your details: '+err.message+'. Please try again.',false);
-  }finally{btn.disabled=false;btn.textContent='Submit Client Details →';}
+  }finally{
+    btn.disabled=false;btn.textContent='Submit Client Details →';
+  }
 });
 
+let clientTypingTimer=null;
+let clientTypingLastPing=0;
+let clientTypingActive=false;
+async function setClientTyping(typing){
+  if(!lastClient.id||!apiReady()) return;
+  try{await fetch(CHAT_API_URL+'/api/typing',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','X-Client-Token':lastClient.token},body:JSON.stringify({clientId:lastClient.id,typing})});}catch(_){}
+}
+function reportClientTyping(){
+  if(!lastClient.id) return;
+  const now=Date.now();
+  if(!clientTypingActive || now-clientTypingLastPing>2200){
+    clientTypingActive=true; clientTypingLastPing=now; setClientTyping(true);
+  }
+  if(clientTypingTimer) clearTimeout(clientTypingTimer);
+  clientTypingTimer=setTimeout(()=>{clientTypingActive=false;setClientTyping(false);},2200);
+}
 async function renderMessages(){
   if(!lastClient.id||!apiReady()) return;
   try{
     const response=await fetch(CHAT_API_URL+'/api/messages?clientId='+encodeURIComponent(lastClient.id),{cache:'no-store',headers:{'X-Client-Token':lastClient.token}});
     if(!response.ok){const failure=await response.json().catch(()=>({}));chatNote.textContent=failure.error||'Could not refresh messages. Retrying automatically…';return;}
     const data=await response.json();
+    chatTypingIndicator.textContent=data.adminTyping?'Hasini is typing…':'';
+    chatTypingIndicator.style.display=data.adminTyping?'block':'none';
     const body=document.getElementById('chatBody');
     body.innerHTML='';
-    data.messages.forEach(m=>{
+    (data.messages||[]).forEach(m=>{
       const bubble=document.createElement('div');
       bubble.className='chat-message';
       bubble.style.margin=m.sender==='client'?'10px 0 0 auto':'10px 0 0';
       if(m.sender==='client'){bubble.style.background='#dcf8c6';bubble.style.borderRadius='17px 17px 5px 17px';}
-      bubble.textContent=m.text;
-      const time=document.createElement('span');time.className='chat-time';
-      time.textContent=new Date(m.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-      bubble.appendChild(time);body.appendChild(bubble);
+      else if(m.sender==='admin'){bubble.style.background='#ffffff';bubble.style.border='1px solid #dcebf2';bubble.style.borderRadius='17px 17px 17px 5px';}
+      else {bubble.style.background='#ffffff';bubble.style.borderRadius='17px';}
+      const text=document.createElement('div');text.textContent=m.text||'';bubble.appendChild(text);
+      const time=document.createElement('span');time.className='chat-time';time.style.display='block';time.style.marginTop='5px';
+      time.style.textAlign='right';time.textContent=new Date(m.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});bubble.appendChild(time);
+      if(m.sender==='client'){
+        const receipt=document.createElement('span');receipt.className='chat-time';receipt.style.display='block';receipt.style.textAlign='right';
+        receipt.textContent=Number(m.readByAdmin)===1?'Seen by Hasini ✓✓':'Sent ✓';bubble.appendChild(receipt);
+      }
+      body.appendChild(bubble);
     });
     body.scrollTop=body.scrollHeight;
-    chatNote.textContent='Messages are saved in this conversation. Hasini can reply from the private admin dashboard.';
+    chatNote.textContent='Messages stay in this private conversation. Hasini can reply from the admin inbox.';
   }catch(_){chatNote.textContent='Connection issue. Your chat will retry automatically.';}
 }
 async function sendChatMessage(){
@@ -589,13 +670,14 @@ async function sendChatMessage(){
     const response=await fetch(CHAT_API_URL+'/api/messages',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','X-Client-Token':lastClient.token},body:JSON.stringify({clientId:lastClient.id,text:message})});
     const result=await response.json();
     if(!response.ok) throw new Error(result.error||'Message could not be sent.');
-    chatInput.value='';await renderMessages();
+    chatInput.value='';clientTypingActive=false;if(clientTypingTimer)clearTimeout(clientTypingTimer);await setClientTyping(false);await renderMessages();
   }catch(err){chatNote.textContent=err.message;}
   finally{chatSend.disabled=false;}
 }
+chatInput.addEventListener('input',reportClientTyping);
 chatSend.addEventListener('click',sendChatMessage);
 chatInput.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();sendChatMessage();}});
-window.addEventListener('load',()=>{try{const saved=JSON.parse(sessionStorage.getItem('hasiniChatClient')||'null');if(saved&&saved.id&&saved.token){lastClient=saved;chatLauncher.classList.add('visible');chatNote.textContent='Open your private chat to see Hasini’s replies.';}}catch(_){}});
+window.addEventListener('load',()=>{try{const saved=JSON.parse(sessionStorage.getItem('hasiniChatClient')||'null');if(saved&&saved.id&&saved.token){lastClient=saved;chatLauncher.classList.add('visible');chatNote.textContent='Open your private chat to see Hasini’s replies.';}}catch(_){};if('serviceWorker' in navigator){navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});}});
 
 /* Smooth scroll-reveal animations */
 const revealTargets=[
