@@ -83,7 +83,7 @@ async function request(path, options={}){
   if(!apiReady()) throw new Error("Before using the dashboard, replace the API URL placeholder in admin.html with your deployed Cloudflare Worker URL.");
   const headers={...(options.headers||{}),"X-Admin-Password":adminPassword};
   if(options.body) headers["Content-Type"]="application/json";
-  const res=await fetch(API_BASE+path,{...options,headers});
+  const res=await fetch(API_BASE+path,{...options,headers,cache:'no-store'});
   let data={}; try{data=await res.json()}catch{}
   if(!res.ok) throw new Error(data.error||`Request failed (${res.status})`);
   return data;
@@ -116,7 +116,7 @@ function renderProfile(c,profile){
 }
 $('loginForm').addEventListener('submit', async (e)=>{
   e.preventDefault();adminPassword=$('password').value;$('loginBtn').disabled=true;showStatus('loginStatus','Signing in…',false);
-  try{const connected=await loadClients();if(!connected)throw new Error($('listStatus').textContent||'Unable to sign in. Check the API URL and password.');$('loginPanel').classList.add('hidden');$('app').classList.remove('hidden');$('password').value='';showStatus('loginStatus','',false);if(!refreshTimer)refreshTimer=setInterval(()=>loadClients(true),5000);}
+  try{const connected=await loadClients();if(!connected)throw new Error($('listStatus').textContent||'Unable to sign in. Check the API URL and password.');$('loginPanel').classList.add('hidden');$('app').classList.remove('hidden');$('password').value='';showStatus('loginStatus','',false);if(!refreshTimer)refreshTimer=setInterval(()=>loadClients(true),3000);}
   catch(err){adminPassword='';showStatus('loginStatus',err.message);}
   finally{$('loginBtn').disabled=false;}
 });
@@ -126,7 +126,7 @@ $('logoutBtn').addEventListener('click',()=>{adminPassword='';selectedClientId='
 function bindRefreshButton(){const b=$('refreshBtn');if(b)b.addEventListener('click',()=>loadClients());}
 async function loadClients(silent=false){
   try{const data=await request('/api/admin/clients');cachedClients=data.clients||[];$('clientCount').textContent=cachedClients.length+' client'+(cachedClients.length===1?'':'s');renderClientList();showStatus('listStatus','',false);if(selectedClientId&&!cachedClients.some(x=>x.id===selectedClientId)){selectedClientId='';$('replyForm').classList.add('hidden');}else if(selectedClientId){await loadMessages(false);}return true;}
-  catch(err){if(!silent)showStatus('listStatus',err.message);if(err.message.toLowerCase().includes('incorrect')){$('loginPanel').classList.remove('hidden');$('app').classList.add('hidden');}return false;}
+  catch(err){showStatus('listStatus',silent?'Connection issue — retrying automatically.':err.message);if(err.message.toLowerCase().includes('incorrect')){$('loginPanel').classList.remove('hidden');$('app').classList.add('hidden');}return false;}
 }
 async function selectClient(c){
   selectedClientId=c.id;renderClientList();$('app').classList.add('mobile-chat');
